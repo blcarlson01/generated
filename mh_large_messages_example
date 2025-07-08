@@ -1,0 +1,39 @@
+import tiktoken
+from openai import ChatCompletion
+
+def num_tokens_from_messages(messages, model="gpt-4"):
+    encoding = tiktoken.encoding_for_model(model)
+    return sum(len(encoding.encode(m['content'])) for m in messages)
+
+def split_conversation(convo, max_tokens=8000):
+    chunks = []
+    current = []
+    total = 0
+    for message in convo:
+        tokens = len(tiktoken.encoding_for_model("gpt-4").encode(message['content']))
+        if total + tokens > max_tokens:
+            chunks.append(current)
+            current = []
+            total = 0
+        current.append(message)
+        total += tokens
+    if current:
+        chunks.append(current)
+    return chunks
+
+def summarize_chunk(chunk):
+    summary_prompt = [
+        {"role": "system", "content": "Summarize this user-LLM conversation chunk, preserving signs of emotional distress, mental health issues, or attachment to the AI."}
+    ] + chunk
+    response = ChatCompletion.create(model="gpt-4", messages=summary_prompt)
+    return response['choices'][0]['message']['content']
+
+# Inside your loop:
+if num_tokens_from_messages(convo) > 100000:
+    chunks = split_conversation(convo)
+    summaries = [summarize_chunk(chunk) for chunk in chunks]
+    summarized_convo = [{"role": "user", "content": "\n\n".join(summaries)}]
+else:
+    summarized_convo = convo
+
+# Now run the evaluation as usual on summarized_convo
