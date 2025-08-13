@@ -1,0 +1,193 @@
+import numpy as np
+import faiss
+import joblib
+from collections import Counter
+import os
+
+# -----------------------------
+# Config
+# -----------------------------
+EMBED_DIM = 384
+INDEX_FILE = "faiss_index_with_ids.bin"
+LABELS_DICT_FILE = "faiss_labels_dict.pkl"
+MAPPING_FILE = "label_mapping.pkl"
+
+# -----------------------------
+# Load or Initialize
+# -----------------------------
+def load_index_and_labels():
+    if os.path.exists(INDEX_FILE) and os.path.exists(LABELS_DICT_FILE) and os.path.exists(MAPPING_FILE):
+        index = faiss.read_index(INDEX_FILE)
+        labels_dict = joblib.load(LABELS_DICT_FILE)  # {vector_id: label_id}
+        mappings = joblib.load(MAPPING_FILE)         # {label_to_id, id_to_label}
+        print(f"Loaded index with {index.ntotal} vectors.")
+    else:
+        index = faiss.IndexIDMap(faiss.IndexFlatL2(EMBED_DIM))
+        labels_dict = {}
+        mappings = {"label_to_id": {}, "id_to_label": {}}
+        print("Initialized new index.")
+    return index, labels_dict, mappings
+
+# -----------------------------
+# Save State
+# -----------------------------
+def save_index_and_labels(index, labels_dict, mappings):
+    faiss.write_index(index, INDEX_FILE)
+    joblib.dump(labels_dict, LABELS_DICT_FILE)
+    joblib.dump(mappings, MAPPING_FILE)
+    print(f"Saved index with {index.ntotal} vectors.")
+
+# -----------------------------
+# Add New Examples
+# -----------------------------
+def add_examples(index, labels_dict, mappings, new_embeddings, new_labels):
+    new_embeddings = new_embeddings.astype(np.float32)
+
+    # Ensure label mapping exists
+    label_ids = []
+    for label in new_labels:
+        if label not in mappings["label_to_id"]:
+            new_id = len(mappings["label_to_id"])
+            mappings["label_to_id"][label] = new_id
+            mappings["id_to_label"][new_id] = label
+        label_ids.append(mappings["label_to_id"][label])
+
+    # Assign unique vector IDs (never reuse IDs)
+    if labels_dict:
+        max_id = max(labels_dict.keys())
+    else:
+        max_id = 0
+    vector_ids = np.arange(max_id + 1, max_id + 1 + len(new_embeddings))
+
+    # Add to FAISS and dictionary
+    index.add_with_ids(new_embeddings, vector_ids)
+    for vid, lid in zip(vector_ids, label_ids):
+        labels_dict[int(vid)] = int(lid)
+
+    print(f"Added {len(vector_ids)} new examples.")
+    return labels_dict, mappings, vector_ids
+
+# -----------------------------
+# Remove Examples by Vector ID
+# -----------------------------
+def remove_examples(index, labels_dict, vector_ids_to_remove):
+    remove_ids_np = np.array(vector_ids_to_remove, dtype=np.int64)
+    index.remove_ids(remove_ids_np)
+    for vid in vector_ids_to_remove:
+        labels_dict.pop(int(vid), None)
+    print(f"Removed {len(vector_ids_to_remove)} examples.")
+    return labels_dict
+
+# -----------------------------
+# Predict
+# -----------------------------
+def faiss_predict(index, labels_dict, mappings, X, k=3):
+    distances, indices = index.search(X.astype(np.float32), k)
+    preds = []
+    for neighbor_idxs in indices:
+        neighbor_labels = []
+        for idx in neighbor_idxs:
+            if idx != -1 and int(idx) in labels_dict:
+                neighbor_labels.append(labels_dict[int(idx)])
+        if neighbor_labels:
+            most_common = Counter(neighbor_labels).most_common(1)[0][0]
+            preds.append(mappings["id_to_label"][most_common])
+        else:
+            preds.append(None)  # No neighbors found
+    return np.array(preds)
+
+# -----------------------------
+# Search All Embeddings for a Given Label
+# -----------------------------
+def search_by_label(index, labels_dict, mappings, label):
+    """Return (vector_ids, embeddings) for all items with the given label."""
+    if label not in mappings["label_to_id"]:
+        print(f"Label '{label}' not found.")
+        return np.array([]), np.empty((0, EMBED_DIM), dtype=np.float32)
+
+    label_id = mappings["label_to_id"][label]
+
+    # Get IDs for that label
+    vector_ids = np.array([vid for vid, lid in labels_dict.items() if lid == label_id], dtype=np.int64)
+
+    if len(vector_ids) == 0:
+        print(f"No vectors found for label '{label}'.")
+        return np.array([]), np.empty((0, EMBED_DIM), dtype=np.float32)
+
+    # Pull embeddings from FAISS by ID
+    embeddings = np.empty((len(vector_ids), EMBED_DIM), dtype=np.float32)
+    index.reconstruct_batch(vector_ids, embeddings)
+
+    return vector_ids, embeddings
+
+# -----------------------------
+# Example Usage
+# -----------------------------
+if __name__ == "__main__":
+    index, labels_dict, mappings = load_index_and_labels()
+
+    # Add initial data if empty
+    if index.ntotal == 0:
+        n_classes = 3
+        n_samples_per_class = 20
+        X_train = np.random.rand(n_classes * n_samples_per_class, EMBED_DIM)
+        y_train = np.repeat(["vague", "technical", "safety"], n_samples_per_class)
+        labels_dict, mappings, _ = add_examples(index, labels_dict, mappings, X_train, y_train)
+        save_index_and_labels(index, labels_dict, mappings)
+
+    # Search for all "technical" embeddings
+    ids, embs = search_by_label(index, labels_dict, mappings, "technical")
+    print(f"Found {len(ids)} 'technical' vectors.")
+    print("Sample IDs:", ids[:5])
+    print("Sample embeddings shape:", embs.shape)
+
+    # Predict some random points
+    X_test = np.random.rand(5, EMBED_DIM)
+    y_pred = faiss_predict(index, labels_dict, mappings, X_test, k=3)
+    print("Sample predictions:", y_pred)
+
+FAISS is perfect here because:
+
+    It doesn’t need retraining — just store embeddings & labels.
+
+    Works well in low-data situations if your embedding model is good.
+
+    Scales to millions of embeddings, so 25k/day is 
+
+How It Works
+
+    Index creation (faiss.IndexFlatL2) — stores your training embeddings.
+
+    index.add() — inserts all labeled embeddings into the FAISS index.
+
+    Search — For each new point, FAISS finds its k nearest neighbors.
+
+    Majority vote — Assigns the most common label among the neighbors.
+
+Why FAISS fits your case
+
+    Small labeled set — It works without overfitting.
+
+    Scalable — 25k/day is a joke for FAISS (it can do millions/sec on CPU).
+
+    No retraining — Just add new points to the index when you get them.
+
+    Embeddings-friendly — Works in high-dimensional spaces like 384–1536 dims
+
+New Feature: search_by_label()
+
+    Input: label (string)
+
+    Output: (vector_ids, embeddings) for all items with that label
+
+    Uses index.reconstruct_batch() to pull embeddings directly from FAISS without needing to store them separately.
+
+Now you can:
+
+    Query all embeddings for a label to retrain or audit data
+
+    Delete them by passing vector_ids to remove_examples()
+
+    Predict on new data with faiss_predict()
+
+    Add new data incrementally and persist everything
