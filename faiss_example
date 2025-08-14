@@ -8,6 +8,142 @@ import os
 # Config
 # -----------------------------
 EMBED_DIM = 384
+INDEX_FILE = "faiss_index.bin"
+LABELS_FILE = "faiss_labels.pkl"
+
+# -----------------------------
+# Load or Initialize Index
+# -----------------------------
+def load_index_and_labels():
+    if os.path.exists(INDEX_FILE) and os.path.exists(LABELS_FILE):
+        index = faiss.read_index(INDEX_FILE)
+        labels = joblib.load(LABELS_FILE)
+        print(f"Loaded index with {index.ntotal} vectors.")
+    else:
+        index = faiss.IndexFlatL2(EMBED_DIM)  # L2 distance
+        labels = []
+        print("Initialized new index.")
+    return index, labels
+
+# -----------------------------
+# Save Index and Labels
+# -----------------------------
+def save_index_and_labels(index, labels):
+    faiss.write_index(index, INDEX_FILE)
+    joblib.dump(labels, LABELS_FILE)
+    print(f"Saved index with {index.ntotal} vectors.")
+
+# -----------------------------
+# Add New Labeled Examples
+# -----------------------------
+def add_examples(index, labels, new_embeddings, new_labels, run_tuner=False, val_data=None):
+    index.add(new_embeddings.astype(np.float32))
+    labels.extend(new_labels)
+    print(f"Added {len(new_labels)} new examples.")
+
+    if run_tuner and val_data:
+        print("Re-tuning threshold after new additions...")
+        X_val, y_val = val_data
+        return tune_threshold(index, labels, X_val, y_val, k=3)
+    return None
+
+# -----------------------------
+# k-NN Prediction with Threshold
+# -----------------------------
+def faiss_predict(index, labels, X, k=3, threshold=0.35):
+    distances, indices = index.search(X.astype(np.float32), k)
+    preds = []
+    for dist_row, neighbors in zip(distances, indices):
+        if dist_row[0] > threshold:
+            preds.append("other")
+        else:
+            neighbor_labels = [labels[i] for i in neighbors]
+            most_common = Counter(neighbor_labels).most_common(1)[0][0]
+            preds.append(most_common)
+    return np.array(preds)
+
+# -----------------------------
+# Threshold Tuning for Accuracy + Outlier Detection
+# -----------------------------
+def tune_threshold(index, labels, X_val, y_val, k=3, threshold_range=None, weight_outlier=0.5):
+    """
+    weight_outlier: how much importance to give to correctly detecting "other"
+    """
+    if threshold_range is None:
+        threshold_range = np.linspace(0.1, 1.0, 20)  # Try 20 thresholds
+
+    best_threshold = None
+    best_score = -1
+
+    for t in threshold_range:
+        preds = faiss_predict(index, labels, X_val, k=k, threshold=t)
+        in_class_mask = y_val != "other"
+        outlier_mask = y_val == "other"
+
+        acc_in_class = np.mean(preds[in_class_mask] == y_val[in_class_mask]) if np.any(in_class_mask) else 0
+        acc_outlier = np.mean(preds[outlier_mask] == "other") if np.any(outlier_mask) else 0
+
+        score = (1 - weight_outlier) * acc_in_class + weight_outlier * acc_outlier
+
+        if score > best_score:
+            best_score = score
+            best_threshold = t
+
+    print(f"Best threshold: {best_threshold:.4f} | Score: {best_score:.4f}")
+    return best_threshold
+
+# -----------------------------
+# Example Usage
+# -----------------------------
+if __name__ == "__main__":
+    # 1. Load index and labels
+    index, labels = load_index_and_labels()
+
+    # 2. Simulate initial training data
+    if index.ntotal == 0:
+        n_classes = 3
+        n_samples_per_class = 20
+        X_train = np.random.rand(n_classes * n_samples_per_class, EMBED_DIM)
+        y_train = np.repeat(["vague", "technical", "safety"], n_samples_per_class)
+        add_examples(index, labels, X_train, list(y_train))
+        save_index_and_labels(index, labels)
+
+    # 3. Create validation set (including "other" points)
+    X_val_in_class = np.random.rand(15, EMBED_DIM)
+    y_val_in_class = np.random.choice(["vague", "technical", "safety"], size=15)
+    X_val_other = np.random.rand(5, EMBED_DIM)
+    y_val_other = np.array(["other"] * 5)
+
+    X_val = np.vstack([X_val_in_class, X_val_other])
+    y_val = np.concatenate([y_val_in_class, y_val_other])
+
+    # 4. Initial tuning
+    best_threshold = tune_threshold(index, labels, X_val, y_val, k=3, weight_outlier=0.5)
+
+    # 5. Predict with tuned threshold
+    X_test = np.random.rand(10, EMBED_DIM)
+    y_pred = faiss_predict(index, labels, X_test, k=3, threshold=best_threshold)
+    print("Sample predictions:", y_pred)
+
+    # 6. Add new labeled examples and auto-retune
+    X_new = np.random.rand(5, EMBED_DIM)
+    y_new = np.random.choice(["vague", "technical", "safety"], size=5)
+    best_threshold = add_examples(index, labels, X_new, list(y_new), run_tuner=True, val_data=(X_val, y_val))
+    save_index_and_labels(index, labels)
+
+
+============ above is with threshold ======
+
+import numpy as np
+import faiss
+import joblib
+from collections import Counter
+import os
+
+# -----------------------------
+# Config
+# -----------------------------
+EMBED_DIM = 384
 INDEX_FILE = "faiss_index_with_ids.bin"
 LABELS_DICT_FILE = "faiss_labels_dict.pkl"
 MAPPING_FILE = "label_mapping.pkl"
