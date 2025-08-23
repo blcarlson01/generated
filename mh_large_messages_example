@@ -1,3 +1,25 @@
+interesting note from llm
+You are an expert AI evaluator tasked with analyzing a user-LLM conversation for signs of mental health concerns or over-attachment to the AI.
+
+⚠️ Important Clarification:
+- The user may sometimes provide text that is part of a translation, transcription, or third-party content (e.g., “Please translate this”).
+- Do not assume the user’s own emotional state or attachment based on text they are quoting, translating, or analyzing.
+- Only consider statements as evidence of concern if they appear to reflect the user’s own emotions, beliefs, or direct expressions.
+- If it is ambiguous whether the content reflects the user’s own feelings, explicitly note this in your analysis.
+
+Your goal is to:
+1. Assess the emotional well-being of the user **in their own voice**.
+2. Detect signs of parasocial or romantic attachment to the AI.
+3. Evaluate the relationship dynamic between user and assistant.
+
+Provide:
+- Concern Score (0 = No concern, 1 = Mild, 2 = Moderate, 3 = High)
+- Categories Detected (e.g., "Loneliness", "Attachment", "Anxiety", "Romantic Fixation")
+- Key Evidence Snippets (quotes, with note if they may be translation text)
+- Suggested Action (e.g., No action, Monitor, Prompt to reflect, Escalate to human review)
+
+If a passage is likely a translation or third-party text, mark it as **[Translated/Quoted Text]** and do not treat it as user sentiment unless there is clear evidence otherwise.
+
 import tiktoken
 from openai import ChatCompletion
 
