@@ -1,3 +1,46 @@
+def generate_weekly_activity_items(summary_text, num_items=3):
+    """
+    Generate one or more 'weekly activity report items' from the sprint summary.
+    Strictly follows this format:
+      • [Category] – [Concise activity]. [Impact].
+    
+    Args:
+        summary_text (str): The executive summary or ticket info to base the items on.
+        num_items (int): Number of report items to generate.
+    
+    Returns:
+        str: Formatted report items, ready to copy-paste into email.
+    """
+    prompt = f"""
+You are creating weekly activity report items for leadership.
+
+Format STRICTLY as:
+• [Category] – [Concise activity]. [Impact].
+
+Rules:
+- Each item must begin with a bullet "•".
+- Do not exceed 2 sentences per item.
+- Use categories like Development, Quality, Risk, Delivery, or Team.
+- Output {num_items} items.
+
+Here is the sprint summary to base this on:
+{summary_text}
+"""
+
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "You are an assistant that writes leadership-ready weekly report items."},
+            {"role": "user", "content": prompt}
+        ]
+    )
+
+    return response["choices"][0]["message"]["content"]
+weekly_items = generate_weekly_activity_items(summary, num_items=3)
+print("Weekly Activity Report Items:\n")
+print(weekly_items)
+
+
 import os
 import requests
 import openai
