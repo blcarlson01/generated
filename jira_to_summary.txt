@@ -1,3 +1,84 @@
+from jira import JIRA
+import ssl
+import OpenSSL.crypto
+import requests
+import json
+
+def get_jira_issues_with_checklist(jira_url, jql, cert_p12_path, cert_password, smart_checklist_field="customfield_12345"):
+    """
+    Fetch Jira issues with Smart Checklist progress included.
+    
+    Args:
+        jira_url (str): Jira server URL.
+        jql (str): JQL query string.
+        cert_p12_path (str): Path to the PKI p12 certificate file.
+        cert_password (str): Password for the PKI certificate.
+        smart_checklist_field (str): Jira custom field key for Smart Checklist.
+    
+    Returns:
+        list of dict: Issues with checklist progress details.
+    """
+    # Load PKI cert from .p12
+    p12 = OpenSSL.crypto.load_pkcs12(open(cert_p12_path, "rb").read(), cert_password.encode("utf-8"))
+    cert = ssl.DER_cert_to_PEM_cert(OpenSSL.crypto.dump_certificate(OpenSSL.crypto.FILETYPE_ASN1, p12.get_certificate()))
+    key = OpenSSL.crypto.dump_privatekey(OpenSSL.crypto.FILETYPE_PEM, p12.get_privatekey())
+
+    session = requests.Session()
+    session.cert = (cert_p12_path, cert_p12_path)  # assuming the file has both cert+key
+    session.verify = True
+
+    jira = JIRA(server=jira_url, options={'server': jira_url}, session=session)
+
+    issues = jira.search_issues(jql, maxResults=100, fields=["summary", "status", "comment", smart_checklist_field])
+
+    results = []
+    for issue in issues:
+        checklist_items = getattr(issue.fields, smart_checklist_field, None)
+        if checklist_items:
+            total = len(checklist_items)
+            completed = sum(1 for item in checklist_items if item.get("checked"))
+            checklist_progress = f"{completed}/{total} items completed"
+            checklist_details = [f"[{'x' if item['checked'] else ' '}] {item['name']}" for item in checklist_items]
+        else:
+            checklist_progress = "No checklist"
+            checklist_details = []
+
+        results.append({
+            "key": issue.key,
+            "summary": issue.fields.summary,
+            "status": issue.fields.status.name,
+            "checklist_progress": checklist_progress,
+            "checklist_details": checklist_details,
+            "comments": [c.body for c in issue.fields.comment.comments]
+        })
+    
+    return results
+def prepare_summary_input(issues):
+    """
+    Convert enriched Jira issues into a text block for LLM summarization.
+    """
+    lines = []
+    for i in issues:
+        lines.append(
+            f"{i['key']} – {i['summary']} "
+            f"(Status: {i['status']}, Progress: {i['checklist_progress']})"
+        )
+        if i['checklist_details']:
+            lines.append("  Checklist: " + "; ".join(i['checklist_details']))
+        if i['comments']:
+            lines.append("  Comments: " + " | ".join(i['comments']))
+    return "\n".join(lines)
+jira_data = get_jira_issues_with_checklist(
+    jira_url="https://yourcompany.atlassian.net",
+    jql="project = PROJ AND sprint in openSprints()",
+    cert_p12_path="path/to/cert.p12",
+    cert_password="yourpassword"
+)
+
+input_text = prepare_summary_input(jira_data)
+weekly_items = generate_weekly_activity_items(input_text, num_items=5)
+print(weekly_items)
+
 def generate_weekly_activity_items(summary_text, num_items=3):
     """
     Generate one or more 'weekly activity report items' from the sprint summary.
@@ -250,3 +331,425 @@ if __name__ == "__main__":
     # send_email(f"Sprint Summary: {sprint['name']}", report_html)
 
     print(report_md)
+
+
+000 pages
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Sprint Summary — Browser mTLS + Smart Checklist</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+  body { font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, Arial; margin: 20px; color:#111; }
+  h1 { margin-bottom: 8px; }
+  label { display:block; margin-top:10px; font-weight:600; }
+  input[type=text], input[type=password], textarea, select { width:100%; padding:8px; margin-top:6px; box-sizing:border-box; border:1px solid #d0d0d0; border-radius:6px; font-size:14px; }
+  textarea { min-height:120px; font-family:monospace; }
+  button { margin-top:10px; padding:10px 14px; border-radius:8px; border:0; background:#0366d6; color:white; cursor:pointer; }
+  button.secondary { background:#6c757d; }
+  .col { display:flex; gap:12px; }
+  .col > div { flex:1; }
+  pre { background:#f7f7f8; padding:12px; border-radius:8px; white-space:pre-wrap; word-wrap:break-word; }
+  .small { font-size:13px; color:#555; margin-top:6px; }
+  .muted { color:#666; font-size:13px; }
+  .controls { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
+  .success { color: #085405; }
+  .error { color: #8b0000; }
+</style>
+</head>
+<body>
+  <h1>Sprint Summary Generator (Browser-only, mTLS)</h1>
+  <p class="muted">Users must install their client cert in the browser & Jira must allow CORS from this origin. If that fails, use the JSON fallback. Paste an OpenAI key for this session.</p>
+
+  <label>Jira Base URL</label>
+  <input id="jiraBase" placeholder="https://jira.example.com" />
+
+  <div class="col">
+    <div>
+      <label>Board ID (for active sprint)</label>
+      <input id="boardId" placeholder="123" />
+    </div>
+    <div>
+      <label>Project Key</label>
+      <input id="projectKey" placeholder="PROJ" />
+    </div>
+  </div>
+
+  <label>Smart Checklist custom field IDs (optional)</label>
+  <input id="checklistFields" placeholder="e.g. customfield_12345,customfield_98765 (leave blank to auto-detect)" />
+  <div class="small">Leave blank to auto-detect checklist-like custom fields. Provide comma-separated customfield IDs to prioritize them.</div>
+
+  <label>OpenAI API Key (paste for this session)</label>
+  <input id="openaiKey" type="password" placeholder="sk-..." />
+  <div class="small">We do <strong>not</strong> store your key — it is used only in-browser for the session.</div>
+
+  <div class="controls">
+    <button id="runBtn">Generate Sprint Summary (live Jira)</button>
+    <button class="secondary" id="useJsonBtn">Use Jira JSON / Paste Upload</button>
+    <button class="secondary" id="clearBtn">Clear Output</button>
+  </div>
+
+  <hr/>
+
+  <div id="fallbackArea" style="display:none; margin-top:10px;">
+    <label>Paste Jira export JSON (or upload .json file)</label>
+    <textarea id="jiraJson" placeholder='Paste the full Jira search JSON (issues array) here'></textarea>
+    <div class="controls">
+      <input type="file" id="jsonFile" accept=".json" />
+      <button id="processJsonBtn">Process JSON</button>
+      <button id="cancelFallback" class="secondary">Cancel</button>
+    </div>
+  </div>
+
+  <h2>Executive Summary</h2>
+  <pre id="summaryOut">—</pre>
+
+  <h2>Weekly Activity Items (copy/paste ready)</h2>
+  <pre id="itemsOut">—</pre>
+
+  <div class="controls">
+    <button id="copySummary">Copy Summary</button>
+    <button id="copyItems">Copy Items</button>
+    <button id="mailtoBtn" class="secondary">Open Email (mailto) with Items</button>
+  </div>
+
+<script>
+/*
+  How it works (browser-only):
+  - The code tries to fetch the active sprint via Jira Agile API: /rest/agile/1.0/board/{boardId}/sprint?state=active
+  - Then pulls issues via /rest/api/2/search with fields=summary,status,issuetype,comment and any customfields included automatically
+  - The browser will present an installed client certificate during TLS if the server requests it.
+  - CORS must be enabled on Jira to allow cross-origin requests from this page.
+  - Users paste their OpenAI key for the session; the call happens from the browser.
+  - If mTLS/CORS fails, user can paste/upload Jira export JSON.
+*/
+
+function el(id){ return document.getElementById(id); }
+
+function showFallback(show) {
+  el('fallbackArea').style.display = show ? 'block' : 'none';
+}
+
+el('useJsonBtn').addEventListener('click', ()=> showFallback(true));
+el('cancelFallback').addEventListener('click', ()=> showFallback(false));
+el('clearBtn').addEventListener('click', () => {
+  el('summaryOut').textContent = '—'; el('itemsOut').textContent = '—';
+});
+
+el('jsonFile').addEventListener('change', async (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  const txt = await f.text();
+  el('jiraJson').value = txt;
+});
+
+function safeParseJSON(s) { try { return JSON.parse(s); } catch(e) { return null; } }
+
+function detectChecklistFields(issue) {
+  // heuristic: find fields that look like arrays of objects with "checked", "name", "isChecked" etc.
+  const fields = Object.keys(issue.fields || {});
+  const candidates = [];
+  for (const k of fields) {
+    const v = issue.fields[k];
+    if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'object') {
+      const keys = Object.keys(v[0]);
+      if (keys.includes('checked') || keys.includes('isChecked') || keys.includes('name') || keys.includes('title') || keys.includes('state')) {
+        candidates.push(k);
+      }
+    }
+    // Some Smart Checklist plugins store a string or an object; we'll still include customfield_*
+    if (typeof v === 'string' && k.startsWith('customfield_') && (v.includes('[') || v.includes('check'))) {
+      candidates.push(k);
+    }
+  }
+  return candidates;
+}
+
+function parseChecklistValue(v) {
+  // Supports multiple formats:
+  // - Array of { checked: bool, name: str }
+  // - Array of { isChecked: bool, title/name: str }
+  // - String (try JSON parse)
+  if (!v) return { total:0, done:0, items:[] };
+  if (Array.isArray(v)) {
+    const items = v.map(it => {
+      const name = it.name || it.title || it.text || it.label || (typeof it === 'string' ? it : JSON.stringify(it));
+      const checked = !!(it.checked || it.isChecked || it.done || it.state === 'done' || it.status === 'done');
+      return { name, checked };
+    });
+    const total = items.length;
+    const done = items.filter(x=>x.checked).length;
+    return { total, done, items };
+  }
+  // Try to decode JSON string
+  if (typeof v === 'string') {
+    try {
+      const parsed = JSON.parse(v);
+      return parseChecklistValue(parsed);
+    } catch(e) {
+      // fallback: try to extract lines like "- [ ] task"
+      const lines = v.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+      const items = [];
+      for (const l of lines) {
+        const m = l.match(/^\s*[-*]\s*\[(x|X| )\]\s*(.+)/);
+        if (m) {
+          items.push({ name: m[2].trim(), checked: !!m[1].match(/[xX]/) });
+        } else {
+          items.push({ name: l, checked:false });
+        }
+      }
+      return { total: items.length, done: items.filter(x=>x.checked).length, items };
+    }
+  }
+  // Unknown format
+  return { total:0, done:0, items:[] };
+}
+
+async function fetchJson(url, opts = {}) {
+  // Generic fetch wrapper with meaningful error messages
+  const r = await fetch(url, Object.assign({ credentials: 'include' }, opts));
+  if (!r.ok) {
+    const text = await r.text().catch(()=>'<non-text response>');
+    throw new Error(`HTTP ${r.status} fetching ${url}: ${text}`);
+  }
+  return await r.json();
+}
+
+function buildTicketsForLLM(issues, checklistFieldCandidates=[]) {
+  // produce a concise human-friendly block describing each issue
+  return issues.map(it => {
+    const f = it.fields || {};
+    const key = it.key || it.id || '(no-key)';
+    const summary = f.summary || '(no summary)';
+    const issuetype = f.issuetype?.name || 'Unknown';
+    const status = f.status?.name || 'Unknown';
+    // collect checklist info from candidate fields (if any)
+    const checklistEntries = [];
+    for (const cf of checklistFieldCandidates) {
+      if (f[cf]) {
+        const parsed = parseChecklistValue(f[cf]);
+        if (parsed.total > 0) {
+          checklistEntries.push(`${cf}=${parsed.done}/${parsed.total}`);
+        }
+      }
+    }
+    // fallback: detect first checklist-like customfield in the issue
+    if (checklistEntries.length === 0) {
+      const detected = detectChecklistFields(it);
+      for (const cf of detected) {
+        if (f[cf]) {
+          const parsed = parseChecklistValue(f[cf]);
+          if (parsed.total > 0) checklistEntries.push(`${cf}=${parsed.done}/${parsed.total}`);
+        }
+      }
+    }
+    const checklist = checklistEntries.length ? checklistEntries.join('; ') : 'No checklist';
+    // comments (last two)
+    const comments = (f.comment && Array.isArray(f.comment.comments)) ? f.comment.comments.slice(-2).map(c=>c.body.replace(/\r?\n/g,' ').trim()).join(' || ') : '';
+    return `${key} – ${summary} (Type:${issuetype}, Status:${status}, Progress:${checklist})\n  Comments: ${comments}`;
+  }).join('\n\n');
+}
+
+async function callOpenAI(apiKey, prompt) {
+  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+    body: JSON.stringify({
+      model: 'gpt-4',
+      messages:[
+        { role:'system', content:'You are an agile reporting assistant generating an executive sprint summary and weekly activity report items.' },
+        { role:'user', content: prompt }
+      ],
+      max_tokens: 800,
+      temperature: 0.15
+    })
+  });
+  if (!resp.ok) {
+    const t = await resp.text();
+    throw new Error(`OpenAI error ${resp.status}: ${t}`);
+  }
+  const j = await resp.json();
+  return j.choices?.[0]?.message?.content || '';
+}
+
+function extractItemsStrict(content) {
+  // Try to extract bullets that start with "•"
+  const lines = content.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  const bullets = lines.filter(l => l.startsWith('•'));
+  if (bullets.length) return bullets.join('\n');
+  // fallback: try lines that start with "-" or "*"
+  const alt = lines.filter(l => l.startsWith('-') || l.startsWith('*'));
+  if (alt.length) return alt.join('\n');
+  // fallback: last 6 lines
+  return lines.slice(-6).join('\n');
+}
+
+// Primary "live Jira" workflow
+el('runBtn').addEventListener('click', async () => {
+  try {
+    el('summaryOut').textContent = 'Working: fetching sprint...';
+    const jiraBase = el('jiraBase').value.trim();
+    const boardId = el('boardId').value.trim();
+    const projectKey = el('projectKey').value.trim();
+    const openaiKey = el('openaiKey').value.trim();
+    const checklistFieldInput = el('checklistFields').value.trim();
+
+    if (!jiraBase || !boardId || !projectKey || !openaiKey) {
+      alert('Please supply Jira Base URL, Board ID, Project Key, and your OpenAI key (session-only).');
+      return;
+    }
+
+    // get active sprint
+    const sprintsUrl = `${jiraBase.replace(/\/$/,'')}/rest/agile/1.0/board/${encodeURIComponent(boardId)}/sprint?state=active`;
+    const sprints = await fetchJson(sprintsUrl);
+    if (!sprints.values || !sprints.values.length) throw new Error('No active sprint found for that board.');
+    const sprint = sprints.values[0];
+
+    // fetch issues; request many fields including all customfields so we can detect checklist fields
+    const fieldsParam = encodeURIComponent('summary,status,issuetype,comment');
+    const jql = encodeURIComponent(`sprint = ${sprint.id} AND project = ${projectKey}`);
+    const searchUrl = `${jiraBase.replace(/\/$/,'')}/rest/api/2/search?jql=${jql}&maxResults=1000&fields=${fieldsParam}`;
+    const searchRes = await fetchJson(searchUrl);
+    const issues = searchRes.issues || [];
+
+    const checklistFields = checklistFieldInput ? checklistFieldInput.split(',').map(s=>s.trim()).filter(Boolean) : [];
+
+    const ticketsText = buildTicketsForLLM(issues, checklistFields);
+
+    // calculate simple stats
+    const stats = {
+      total_issues: issues.length,
+      stories: issues.filter(i => (i.fields.issuetype?.name||'').toLowerCase()==='story').length,
+      bugs: issues.filter(i => (i.fields.issuetype?.name||'').toLowerCase()==='bug').length,
+      done: issues.filter(i => (i.fields.status?.name||'').toLowerCase()==='done').length,
+      carryover: issues.filter(i => (i.fields.status?.name||'').toLowerCase()!=='done').length
+    };
+
+    const prompt = `
+Sprint Report
+Sprint: ${sprint.name}
+
+Stats:
+- Total issues: ${stats.total_issues}
+- Completed: ${stats.done}
+- Stories: ${stats.stories}
+- Bugs: ${stats.bugs}
+- Carryover: ${stats.carryover}
+
+Tickets:
+${ticketsText}
+
+Please:
+1) Write an executive summary in two brief paragraphs for senior leadership (high level, non-technical).
+2) Then output exactly 3 weekly activity report items STRICTLY following this format (each on its own line):
+• [Category] – [Concise activity]. [Impact].
+End the output by writing the token string: END_OF_ITEMS
+Only output the summary followed by the items. Do not add additional commentary.
+`;
+
+    el('summaryOut').textContent = 'Calling LLM (using your OpenAI key)... (this happens in your browser)';
+    const llmContent = await callOpenAI(openaiKey, prompt);
+
+    // split by marker if present
+    let execSummary = llmContent;
+    let itemsPart = '';
+    if (llmContent.includes('END_OF_ITEMS')) {
+      const parts = llmContent.split('END_OF_ITEMS');
+      execSummary = parts[0].trim();
+      // items might be in the summary's trailing lines; attempt to extract bullets
+      const after = parts[0].split(/\r?\n/).slice(-6).join('\n');
+      itemsPart = extractItemsStrict(llmContent);
+    } else {
+      // try to heuristically split summary vs bullets
+      itemsPart = extractItemsStrict(llmContent);
+    }
+
+    el('summaryOut').textContent = execSummary;
+    el('itemsOut').textContent = itemsPart || '(no strict bullets found — see full output below)\n\n' + llmContent;
+
+  } catch (err) {
+    el('summaryOut').textContent = 'Error: ' + err.message;
+    el('itemsOut').textContent = '—';
+  }
+});
+
+// Fallback: process pasted/uploaded Jira JSON
+el('processJsonBtn').addEventListener('click', async () => {
+  const txt = el('jiraJson').value.trim();
+  if (!txt) { alert('Paste Jira JSON or upload a file first.'); return; }
+  const parsed = safeParseJSON(txt);
+  if (!parsed) { alert('Invalid JSON. Make sure you pasted the Jira search JSON (containing issues array).'); return; }
+  // support either top-level { issues: [...] } or { "issues": [...] } or the array itself
+  const issues = parsed.issues || parsed;
+  if (!Array.isArray(issues)) { alert('JSON does not contain an issues array.'); return; }
+  // Build tickets block
+  try {
+    const checklistFields = el('checklistFields').value.trim().split(',').map(s=>s.trim()).filter(Boolean);
+    const ticketsText = buildTicketsForLLM(issues, checklistFields);
+    // Use a small synthetic sprint header
+    const sprintName = 'User-provided JSON';
+    const stats = {
+      total_issues: issues.length,
+      stories: issues.filter(i => (i.fields?.issuetype?.name||'').toLowerCase()==='story').length,
+      bugs: issues.filter(i => (i.fields?.issuetype?.name||'').toLowerCase()==='bug').length,
+      done: issues.filter(i => (i.fields?.status?.name||'').toLowerCase()==='done').length,
+      carryover: issues.filter(i => (i.fields?.status?.name||'').toLowerCase()!=='done').length
+    };
+    const prompt = `
+Sprint Report
+Sprint: ${sprintName}
+
+Stats:
+- Total issues: ${stats.total_issues}
+- Completed: ${stats.done}
+- Stories: ${stats.stories}
+- Bugs: ${stats.bugs}
+- Carryover: ${stats.carryover}
+
+Tickets:
+${ticketsText}
+
+Please:
+1) Write an executive summary in two brief paragraphs for senior leadership (high level, non-technical).
+2) Then output exactly 3 weekly activity report items STRICTLY following this format (each on its own line):
+• [Category] – [Concise activity]. [Impact].
+End the output by writing the token string: END_OF_ITEMS
+Only output the summary followed by the items. Do not add additional commentary.
+`;
+    const openaiKey = el('openaiKey').value.trim();
+    if (!openaiKey) { alert('Please paste your OpenAI key for the session before processing JSON.'); return; }
+    el('summaryOut').textContent = 'Calling LLM (browser)…';
+    const llmContent = await callOpenAI(openaiKey, prompt);
+    // same extraction logic
+    const itemsPart = extractItemsStrict(llmContent);
+    el('summaryOut').textContent = llmContent.split('END_OF_ITEMS')[0] || llmContent;
+    el('itemsOut').textContent = itemsPart || '(no strict bullets found — see full output above)\n\n' + llmContent;
+    showFallback(false);
+  } catch (err) {
+    el('summaryOut').textContent = 'Error: ' + err.message;
+  }
+});
+
+// copy buttons and mailto
+el('copySummary').addEventListener('click', async ()=> {
+  try {
+    await navigator.clipboard.writeText(el('summaryOut').textContent);
+    alert('Summary copied to clipboard.');
+  } catch(e) { alert('Copy failed: ' + e.message); }
+});
+el('copyItems').addEventListener('click', async ()=> {
+  try {
+    await navigator.clipboard.writeText(el('itemsOut').textContent);
+    alert('Items copied to clipboard.');
+  } catch(e) { alert('Copy failed: ' + e.message); }
+});
+el('mailtoBtn').addEventListener('click', ()=> {
+  const subject = encodeURIComponent('Weekly Activity Report Items');
+  const body = encodeURIComponent(el('itemsOut').textContent + '\n\n(Generated via Sprint Summary tool)');
+  window.location.href = `mailto:?subject=${subject}&body=${body}`;
+});
+
+</script>
+</body>
+</html>
