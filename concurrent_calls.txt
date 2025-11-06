@@ -1,0 +1,196 @@
+import asyncio
+import json
+import random
+import pandas as pd
+from openai import AsyncOpenAI
+from aiohttp.client_exceptions import ClientResponseError
+
+client = AsyncOpenAI(api_key="YOUR_KEY")
+
+MAX_CONCURRENT = 15
+semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+
+async def stream_and_parse(question, row_index):
+    """Stream response, retry rate limits, return (row_index, dict)."""
+
+    for attempt in range(6):  # retries w/ backoff up to 6 times
+        try:
+            async with semaphore:  # concurrency limiter
+                stream = await client.responses.create(
+                    model="gpt-4.1-mini",
+                    stream=True,
+                    input=[
+                        {"role": "system", "content": """
+                            Return ONLY valid JSON with this structure:
+                            { "summary": "", "category": "", "confidence": 0.0 }
+                        """},
+                        {"role": "user", "content": question}
+                    ]
+                )
+
+                full_text = ""
+
+                # stream text deltas
+                async for event in stream:
+                    if event.type == "response.output_text.delta":
+                        full_text += event.delta
+
+                # Try to parse JSON
+                try:
+                    data = json.loads(full_text)
+                    return row_index, {
+                        "summary": data.get("summary", ""),
+                        "category": data.get("category", ""),
+                        "confidence": data.get("confidence", "")
+                    }
+
+                except json.JSONDecodeError:
+                    # fallback: output raw text in summary field
+                    return row_index, {
+                        "summary": full_text,
+                        "category": "",
+                        "confidence": ""
+                    }
+
+        except ClientResponseError as e:
+            if e.status == 429:  # rate limit
+                wait = (2 ** attempt) + random.random()
+                print(f"[429] Row {row_index} retry in {wait:.2f}s")
+                await asyncio.sleep(wait)
+            else:
+                print(f"[ERROR] Row {row_index} - {e}")
+                await asyncio.sleep(1)
+
+    # All retries failed
+    return row_index, {
+        "summary": "ERROR: could not complete",
+        "category": "",
+        "confidence": ""
+    }
+
+
+async def process_dataframe(df):
+    tasks = [
+        stream_and_parse(question, i)
+        for i, question in enumerate(df["question"])
+    ]
+
+    results = await asyncio.gather(*tasks)
+
+    # Create empty columns
+    df["summary"] = ""
+    df["category"] = ""
+    df["confidence"] = ""
+
+    for row_index, fields in results:
+        df.at[row_index, "summary"] = fields["summary"]
+        df.at[row_index, "category"] = fields["category"]
+        df.at[row_index, "confidence"] = fields["confidence"]
+
+
+# Example for 10k rows
+df = pd.DataFrame({
+    "question": [f"Example question {i}" for i in range(10000)]
+})
+
+asyncio.run(process_dataframe(df))
+print(df.head())
+
+
+=====
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+import random
+import json
+import pandas as pd
+from openai import OpenAI
+import openai
+
+client = OpenAI(api_key="YOUR_KEY")
+
+MAX_WORKERS = 10  # safe for large jobs
+
+
+def ask_model(question, row_index):
+    """Thread-safe LLM call with retry, JSON parsing, and backoff."""
+    for attempt in range(6):  # 6 retries w/ exponential backoff
+        try:
+            res = client.responses.create(
+                model="gpt-4.1-mini",
+                input=[
+                    {
+                        "role": "system",
+                        "content": """
+                            Return ONLY valid JSON with fields:
+                            { "summary": "", "category": "", "confidence": 0.0 }
+                        """
+                    },
+                    {"role": "user", "content": question}
+                ]
+            )
+
+            # Extract full text
+            text = res.output_text
+
+            # Parse JSON into fields
+            try:
+                data = json.loads(text)
+                return row_index, {
+                    "summary": data.get("summary", ""),
+                    "category": data.get("category", ""),
+                    "confidence": data.get("confidence", "")
+                }
+
+            except json.JSONDecodeError:
+                # fallback to raw text if JSON fails
+                return row_index, {
+                    "summary": text,
+                    "category": "",
+                    "confidence": ""
+                }
+
+        except openai.RateLimitError:
+            wait = (2 ** attempt) + random.random()
+            print(f"[429] Row {row_index} waiting {wait:.2f}s")
+            time.sleep(wait)
+
+        except Exception as e:
+            print(f"[ERROR] Row {row_index}: {e}")
+            time.sleep(1)
+
+    # If all retries fail
+    return row_index, {
+        "summary": "ERROR: could not complete",
+        "category": "",
+        "confidence": ""
+    }
+
+
+def process_dataframe(df):
+    futures = []
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        for i, q in enumerate(df["question"]):
+            futures.append(executor.submit(ask_model, q, i))
+
+        # Pre-create output columns
+        df["summary"] = ""
+        df["category"] = ""
+        df["confidence"] = ""
+
+        # As results finish, assign rows
+        for future in as_completed(futures):
+            row_index, fields = future.result()
+            df.at[row_index, "summary"] = fields["summary"]
+            df.at[row_index, "category"] = fields["category"]
+            df.at[row_index, "confidence"] = fields["confidence"]
+
+
+# Example large DF
+df = pd.DataFrame({
+    "question": [f"Example question {i}" for i in range(10000)]
+})
+
+process_dataframe(df)
+print(df.head())
+
