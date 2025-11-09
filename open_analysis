@@ -1,6 +1,16 @@
 https://www.nber.org/system/files/working_papers/w34255/w34255.pdf
 https://www.onetcenter.org/dictionary/24.1/text/iwa_reference.html
 
+After selecting a category, also generate a short list of high-signal keywords that could be used in the future to quickly route similar prompts without using an LLM.
+
+RULES FOR KEYWORDS:
+- After selecting the category, propose 5–10 high-signal keywords that strongly indicate the same category.
+- Keywords must be relevant to the provided prompt.
+- Avoid generic filler words such as "help," "question," or "please."
+- Prioritize domain-specific terms, entities, concepts, and common phrases.
+- Do not summarize the prompt; extract reusable classification signals.
+
+
 Work/Non Work
 You are an internal tool that classifies a message from a user to an AI chatbot,
 based on the context of the previous messages before it.,→
