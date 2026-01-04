@@ -1,3 +1,22 @@
+normaliztion ideas
+Lowercase
+
+Strip PII / IDs / URLs
+
+Deduplicate near-identical prompts (MinHash or SimHash)
+def normalize(text):
+    text = text.lower()
+    text = re.sub(r'https?://\S+', '', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+| Confidence        | Meaning            |
+| ----------------- | ------------------ |
+| ≥ 0.85            | Very strong match  |
+| 0.75–0.85         | Good match         |
+| < 0.75            | Unknown / emerging |
+| Falling over time | Topic drift        |
+
+--
 100k prompts
 ↓
 HDBSCAN
