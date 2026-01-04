@@ -1,0 +1,484 @@
+100k prompts
+↓
+HDBSCAN
+↓
+Keywords (in memory)
+↓
+LLM topic naming (1 call / topic)
+↓
+Persist v1
+---
+New prompts
+↓
+FAISS assignment
+↓
+Confidence + unknown flags
+↓
+Analytics tables
+
+---
+topic_model/
+├── train.py        # build / rebuild topics
+├── assign.py       # assign new prompts
+├── drift.py        # drift metrics + charts
+└── storage/
+    ├── v1/
+    │   ├── topics.faiss
+    │   ├── topics_meta.parquet
+    │   └── assignments.parquet
+    ├── v2/
+    │   └── ...
+
+# common.py
+import numpy as np
+import pandas as pd
+import faiss
+import hdbscan
+import time
+
+from dataclasses import dataclass
+from sklearn.preprocessing import normalize
+from sklearn.cluster import AgglomerativeClustering
+
+
+@dataclass
+class PromptRecord:
+    id: int
+    language: str
+    embedding: np.ndarray
+    text: str | None = None   # IN-MEMORY ONLY
+
+
+def build_faiss_index(vectors: np.ndarray):
+    vectors = vectors.astype("float32")
+    faiss.normalize_L2(vectors)
+    index = faiss.IndexFlatIP(vectors.shape[1])
+    index.add(vectors)
+    return index
+---
+# train.py
+import os
+import numpy as np
+import pandas as pd
+import hdbscan
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.preprocessing import normalize
+from common import PromptRecord, build_faiss_index
+from common import OpenAITopicNamer, KeywordFallbackNamer
+
+def discover_topics(embeddings, min_cluster_size=50):
+    model = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size)
+    return model.fit_predict(embeddings)
+
+
+def compute_centroids(embeddings, labels):
+    centroids = {}
+    for label in set(labels):
+        if label == -1:
+            continue
+        vecs = embeddings[labels == label]
+        c = vecs.mean(axis=0)
+        c /= np.linalg.norm(c)
+        centroids[label] = c.astype("float32")
+    return centroids
+
+
+def language_aware_ctfidf(records, labels, top_k=10):
+    df = pd.DataFrame({
+        "label": labels,
+        "lang": [r.language for r in records],
+        "text": [r.text for r in records]
+    })
+
+    keywords = {}
+
+    for (label, lang), g in df.groupby(["label", "lang"]):
+        if label == -1 or g["text"].isnull().all():
+            continue
+
+        vec = CountVectorizer(
+            stop_words="english" if lang == "en" else None,
+            ngram_range=(1, 2),
+            min_df=2
+        )
+
+        X = vec.fit_transform(g["text"])
+        tf = normalize(X, axis=1, norm="l1")
+        idf = np.log((1 + X.shape[0]) / (1 + (X > 0).sum(axis=0))) + 1
+        tfidf = tf.multiply(idf)
+
+        scores = tfidf.mean(axis=0).A1
+        terms = vec.get_feature_names_out()
+        top = scores.argsort()[-top_k:][::-1]
+
+        keywords[(label, lang)] = [terms[i] for i in top]
+
+    return keywords
+
+
+def train_topic_model(
+    records: list[PromptRecord],
+    topic_version: str,
+    output_dir="storage",
+    enable_llm_naming: bool = True
+):
+    os.makedirs(f"{output_dir}/{topic_version}", exist_ok=True)
+
+    embeddings = np.vstack([r.embedding for r in records])
+    labels = discover_topics(embeddings)
+    centroids = compute_centroids(embeddings, labels)
+
+    # ---- Keywords (in-memory only) ----
+    keywords = language_aware_ctfidf(records, labels)
+
+    # ---- Topic Naming ----
+    if enable_llm_naming and os.getenv("OPENAI_API_KEY"):
+        namer = OpenAITopicNamer(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        )
+    else:
+        namer = KeywordFallbackNamer()
+
+    topic_names = {}
+    for topic_id in centroids.keys():
+        kw = {
+            lang: terms
+            for (t, lang), terms in keywords.items()
+            if t == topic_id
+        }
+        topic_names[topic_id] = namer.name_topic(topic_id, kw)
+
+    # ---- Save FAISS ----
+    index = build_faiss_index(np.vstack(list(centroids.values())))
+    faiss.write_index(index, f"{output_dir}/{topic_version}/topics.faiss")
+
+    # ---- Save Topic Metadata (NO TEXT) ----
+    pd.DataFrame({
+        "topic_id": list(centroids.keys()),
+        "topic_name": [topic_names[t] for t in centroids.keys()],
+        "topic_version": topic_version
+    }).to_parquet(f"{output_dir}/{topic_version}/topics_meta.parquet")
+
+    # ---- Save Assignments ----
+    pd.DataFrame({
+        "id": [r.id for r in records],
+        "language": [r.language for r in records],
+        "topic_id": labels,
+        "topic_version": topic_version
+    }).to_parquet(f"{output_dir}/{topic_version}/assignments.parquet")
+
+    return {
+        "topic_version": topic_version,
+        "num_topics": len(centroids)
+    }
+
+---
+# assign.py
+import numpy as np
+import pandas as pd
+import faiss
+from common import PromptRecord
+
+
+def assign_with_confidence(
+    embeddings,
+    index,
+    topic_ids,
+    threshold=0.75
+):
+    faiss.normalize_L2(embeddings)
+    D, I = index.search(embeddings, 3)
+
+    rows = []
+    for sims, idxs in zip(D, I):
+        matches = [
+            {"topic_id": topic_ids[i], "confidence": float(s)}
+            for s, i in zip(sims, idxs) if s >= threshold
+        ]
+        rows.append({
+            "assignments": matches,
+            "max_confidence": float(sims[0]),
+            "is_unknown": len(matches) == 0
+        })
+
+    return rows
+
+
+def assign_batch(
+    records: list[PromptRecord],
+    topic_version: str,
+    storage_dir="storage"
+):
+    index = faiss.read_index(
+        f"{storage_dir}/{topic_version}/topics.faiss"
+    )
+    meta = pd.read_parquet(
+        f"{storage_dir}/{topic_version}/topics_meta.parquet"
+    )
+    topic_ids = meta["topic_id"].tolist()
+
+    embeddings = np.vstack([r.embedding for r in records])
+    results = assign_with_confidence(embeddings, index, topic_ids)
+
+    return pd.DataFrame({
+        "id": [r.id for r in records],
+        "language": [r.language for r in records],
+        "topic_version": topic_version,
+        "assignments": [r["assignments"] for r in results],
+        "max_confidence": [r["max_confidence"] for r in results],
+        "is_unknown": [r["is_unknown"] for r in results]
+    })
+---
+# drift.py
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+def compute_drift_metrics(df):
+    return {
+        "avg_confidence": df["max_confidence"].mean(),
+        "unknown_rate": df["is_unknown"].mean(),
+        "count": len(df)
+    }
+
+
+def drift_by_time_window(
+    assignments_df,
+    time_col="timestamp",
+    window="7D"
+):
+    metrics = []
+
+    for ts, g in assignments_df.groupby(
+        pd.Grouper(key=time_col, freq=window)
+    ):
+        m = compute_drift_metrics(g)
+        m["window_start"] = ts
+        metrics.append(m)
+
+    return pd.DataFrame(metrics)
+
+
+def plot_drift(drift_df):
+    plt.figure()
+    plt.plot(drift_df["window_start"], drift_df["avg_confidence"])
+    plt.title("Average Topic Confidence Over Time")
+    plt.show()
+
+    plt.figure()
+    plt.plot(drift_df["window_start"], drift_df["unknown_rate"])
+    plt.title("Unknown Topic Rate Over Time")
+    plt.show()
+---
+# common.py (ADD BELOW existing code)
+
+from typing import Optional
+import os
+import json
+import requests
+
+
+class TopicNamer:
+    def name_topic(self, topic_id: int, keywords: dict) -> str:
+        raise NotImplementedError
+
+
+class OpenAITopicNamer(TopicNamer):
+    """
+    OpenAI-compatible endpoint:
+    - Works with OpenAI, Azure OpenAI, vLLM, LM Studio, etc.
+    """
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        model: str = "gpt-4o-mini",
+        timeout: int = 20
+    ):
+        self.api_key = api_key
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.timeout = timeout
+
+    def name_topic(self, topic_id: int, keywords: dict) -> str:
+        """
+        keywords: {lang: [kw1, kw2, ...]}
+        """
+
+        keyword_block = "\n".join(
+            f"{lang}: {', '.join(terms[:6])}"
+            for lang, terms in keywords.items()
+        )
+
+        prompt = f"""
+You are labeling analytics topics.
+
+Given multilingual keywords describing a user intent,
+return a SHORT, CLEAR topic name (2–6 words).
+
+Keywords:
+{keyword_block}
+
+Rules:
+- No punctuation
+- No quotes
+- Title Case
+- No language names
+- Describe intent, not phrasing
+"""
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": "You generate analytics topic names."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.2,
+            "max_tokens": 20
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+        resp = requests.post(
+            f"{self.base_url}/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=self.timeout
+        )
+        resp.raise_for_status()
+
+        return resp.json()["choices"][0]["message"]["content"].strip()
+
+
+class KeywordFallbackNamer(TopicNamer):
+    """Used when LLM is disabled or unavailable."""
+    def name_topic(self, topic_id: int, keywords: dict) -> str:
+        for _, terms in keywords.items():
+            return " / ".join(terms[:3])
+        return f"Topic {topic_id}"
+---
+using drift.py
+import pandas as pd
+from datetime import datetime, timedelta
+import numpy as np
+
+# Example: 10,000 assignments with timestamps over 30 days
+np.random.seed(42)
+
+n = 10000
+dates = [datetime(2025, 12, 1) + timedelta(days=int(x)) for x in np.random.rand(n)*30]
+df = pd.DataFrame({
+    "id": range(n),
+    "language": np.random.choice(["en","es","fr"], size=n),
+    "topic_version": "v1",
+    "assignments": [{}]*n,
+    "max_confidence": np.random.beta(2, 1, size=n),  # mostly high confidence
+    "is_unknown": np.random.rand(n) < 0.1,           # 10% unknown
+    "timestamp": dates
+})
+
+from drift import drift_by_time_window, plot_drift
+
+# Compute weekly drift metrics
+weekly_drift = drift_by_time_window(df, time_col="timestamp", window="7D")
+
+print(weekly_drift.head())
+# Visualize average confidence and unknown rate
+plot_drift(weekly_drift)
+---
+Using Train.py
+Example: Loading Historical Data
+import pandas as pd
+import numpy as np
+from common import PromptRecord
+
+df = pd.read_parquet("historical_embeddings.parquet")
+
+records = [
+    PromptRecord(
+        id=row["id"],
+        embedding=np.array(row["embedding"], dtype=np.float32),
+        language=row["language"]
+    )
+    for _, row in df.iterrows()
+]
+from datetime import date
+
+topic_version = f"v{date.today().isoformat()}"
+# example: v2026-01-04
+export OPENAI_API_KEY="sk-..."
+export OPENAI_BASE_URL="https://api.openai.com/v1"
+export OPENAI_MODEL="gpt-4o-mini"
+from train import train_topic_model
+
+result = train_topic_model(
+    records=records,
+    topic_version=topic_version,
+    output_dir="storage",
+    enable_llm_naming=True
+)
+
+print(result)
+{
+  "topic_version": "v2026-01-04",
+  "num_topics": 143
+}
+storage/
+└── v2026-01-04/
+    ├── topics.faiss
+    ├── topics_meta.parquet
+    └── assignments.parquet
+---
+Day 0:
+  train.py → v1
+
+Daily:
+  assign.py → v1 assignments
+  drift.py → monitor
+
+Drift trigger fires:
+  train.py → v2
+  assign.py switches to v2
+---
+Example use of assign.py
+import pandas as pd
+import numpy as np
+from datetime import datetime
+from common import AssignmentRecord
+
+df = pd.read_parquet("new_prompt_embeddings.parquet")
+
+records = [
+    AssignmentRecord(
+        id=row["id"],
+        embedding=np.array(row["embedding"], dtype=np.float32),
+        language=row["language"],
+        timestamp=row["timestamp"]
+    )
+    for _, row in df.iterrows()
+]
+from assign import assign_topics_batch
+
+result_df = assign_topics_batch(
+    records=records,
+    topic_version="v2026-01-04",
+    storage_dir="storage",
+    confidence_threshold=0.75,
+    top_k=3
+)
+result_df.to_parquet(
+    "warehouse/topic_assignments_2026_01_05.parquet",
+    index=False
+)
+from drift import drift_by_time_window
+
+weekly = drift_by_time_window(
+    result_df,
+    time_col="timestamp",
+    window="7D"
+)
