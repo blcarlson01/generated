@@ -1,0 +1,106 @@
+import os, json
+import pandas as pd
+import textwrap
+import ipywidgets as widgets
+from IPython.display import display, clear_output, Javascript
+
+DATA_DIR = "."
+ANNOTATE = False  # 🔑 toggle this on/off
+
+files = [f for f in os.listdir(DATA_DIR) if f.endswith((".csv", ".json"))]
+
+index = 0
+output = widgets.Output()
+
+def load_preview(file_name):
+    file_path = os.path.join(DATA_DIR, file_name)
+    
+    try:
+        if file_name.endswith(".json"):
+            with open(file_path, "r") as f:
+                data = json.load(f)
+            message = str(data.get("message", ""))
+        else:
+            df = pd.read_csv(file_path)
+            if "message" not in df.columns:
+                return f"Skipping {file_name} (no 'message' column)"
+            message = str(df.loc[0, "message"])
+    except Exception as e:
+        return f"Error loading {file_name}: {e}"
+    
+    return f"FILE: {file_name}\n\n{textwrap.shorten(message, width=400)}"
+
+def annotate_json(file_path, value):
+    if not file_path.endswith(".json"):
+        return
+    try:
+        with open(file_path, "r") as f:
+            data = json.load(f)
+        data["keep"] = value
+        with open(file_path, "w") as f:
+            json.dump(data, f, indent=2)
+    except:
+        pass
+
+def show_next():
+    global index
+    with output:
+        clear_output(wait=True)
+        if index >= len(files):
+            print("Done!")
+            return
+        
+        print(f"[{index+1}/{len(files)}]")
+        print(load_preview(files[index]))
+        
+        msg = "k=keep d=delete q=quit"
+        if ANNOTATE:
+            msg += " y=yes n=no (annotate)"
+        print("\n" + msg)
+
+def handle_key(event):
+    global index
+    if index >= len(files):
+        return
+    
+    key = event["key"]
+    file_name = files[index]
+    file_path = os.path.join(DATA_DIR, file_name)
+    
+    with output:
+        if key == "k":
+            print("→ Kept")
+            index += 1
+            show_next()
+        
+        elif key == "d":
+            os.remove(file_path)
+            print(f"→ Deleted {file_name}")
+            index += 1
+            show_next()
+        
+        elif key == "y" and ANNOTATE:
+            annotate_json(file_path, True)
+            print("→ Annotated keep=True")
+            index += 1
+            show_next()
+        
+        elif key == "n" and ANNOTATE:
+            annotate_json(file_path, False)
+            print("→ Annotated keep=False")
+            index += 1
+            show_next()
+        
+        elif key == "q":
+            print("Quitting.")
+
+keyboard = widgets.Text(value="")
+keyboard.observe(
+    lambda change: handle_key({"key": change["new"][-1]}) if change["new"] else None,
+    names="value"
+)
+
+display(keyboard, output)
+display(Javascript('document.querySelector("input").focus()'))
+
+show_next()
