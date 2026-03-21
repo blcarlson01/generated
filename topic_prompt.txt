@@ -1,0 +1,60 @@
+import json
+import time
+from typing import List, Dict
+from openai import OpenAI
+
+client = OpenAI()
+
+SYSTEM_PROMPT = """You are a strict topic classification system.
+
+Your task is to assign exactly ONE topic to any input text.
+
+Rules:
+- Output must be a single line containing ONLY the topic.
+- Do not include explanations, punctuation, or extra words.
+- The topic must be a short noun phrase (2–4 words maximum).
+- Prefer widely recognized, general categories.
+- Do NOT invent niche or overly specific labels.
+- If multiple topics apply, choose the most dominant one.
+- If the topic is unclear, output: Other
+"""
+
+MODEL = "gpt-5-mini"  # fast + consistent
+
+
+def classify(text: str) -> str:
+    response = client.chat.completions.create(
+        model=MODEL,
+        temperature=0,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"Text:\n{text}"}
+        ],
+    )
+    return response.choices[0].message.content.strip()
+
+
+def batch_classify(input_path: str, output_path: str):
+    results: List[Dict] = []
+
+    with open(input_path, "r") as f:
+        for line in f:
+            item = json.loads(line)
+            text = item["text"]
+
+            topic = classify(text)
+
+            results.append({
+                "text": text,
+                "topic": topic
+            })
+
+            time.sleep(0.1)  # rate limit safety
+
+    with open(output_path, "w") as f:
+        for r in results:
+            f.write(json.dumps(r) + "\n")
+
+
+if __name__ == "__main__":
+    batch_classify("input.jsonl", "output.jsonl")
