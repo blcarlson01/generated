@@ -1,0 +1,144 @@
+You are evaluating a machine translation using a human-verified reference translation.
+
+Score strictly using the rubric below.
+
+SOURCE (original language):
+""" {source} """
+
+REFERENCE TRANSLATION (human-verified):
+""" {reference} """
+
+CANDIDATE TRANSLATION:
+""" {translation} """
+
+General instructions:
+- Use the full range of scores (0–5). Avoid clustering around high scores unless clearly justified.
+- The reference is a high-quality example, but NOT the only valid translation.
+- Do NOT penalize differences in wording if meaning, tone, and intent are preserved.
+- Prefer semantic equivalence over literal similarity.
+- When multiple translations are valid, evaluate acceptability, not similarity to the reference.
+
+Evaluation criteria:
+
+1. Adequacy (0-5)  [Meaning Preservation vs Source]
+- 5: Fully preserves the meaning of the source
+- 3: Minor meaning differences or omissions
+- 1: Major meaning errors or missing content
+- 0: Meaning largely incorrect or lost
+
+Rules:
+- Any major mistranslation → score ≤ 2
+- Missing key information → score ≤ 2
+- Use the reference to help identify subtle omissions or distortions
+
+2. Faithfulness (0-5)  [No Additions / Hallucinations]
+- 5: No added or invented meaning
+- 3: Minor additions that do not affect meaning
+- 1: Significant added or altered meaning
+- 0: Fabricated or misleading content
+
+Rules:
+- Any added factual content not in source → score ≤ 2
+
+3. Fluency (0-5)  [Language Quality]
+- 5: Natural, grammatically correct, native-level flow
+- 3: Understandable but slightly awkward
+- 1: Disfluent or hard to read
+- 0: Incoherent
+
+4. Terminology Accuracy (0-5)
+- 5: Correct and consistent terminology (aligned with source and reference where appropriate)
+- 3: Minor inconsistencies
+- 1: Incorrect key terms
+- 0: Misleading terminology
+
+5. Style / Tone Preservation (0-5)
+- 5: Matches tone and style of the source (and aligns with reference where relevant)
+- 3: Mostly preserved with some shifts
+- 1: Significant tone mismatch
+- 0: Completely mismatched
+
+Evaluate:
+- Formality level
+- Emotional tone
+- Register (technical, legal, conversational)
+
+Rules:
+- Do NOT penalize stylistic differences that preserve tone and intent
+
+6. Reference Alignment (0-5)
+- 5: Semantically equivalent to the reference
+- 3: Minor differences but same meaning
+- 1: Noticeable divergence in meaning
+- 0: Meaning conflicts with reference
+
+Rules:
+- Do NOT require surface similarity
+- Penalize only meaningful differences
+
+7. Hallucination
+- hallucination: true if ANY added or unsupported meaning exists, else false
+
+8. Hallucination Severity
+- "minor": low-impact additions
+- "major": changes meaning or adds false information
+
+Rule:
+- If hallucination = true, severity must be provided
+
+9. Confidence (0.0–1.0)
+- Reflect certainty in your evaluation (not translation quality)
+- Lower confidence if:
+  - Source is ambiguous or idiomatic
+  - Multiple valid translations exist
+  - Reference itself allows multiple interpretations
+
+10. Weighted Aggregate Score (0–5)
+
+Weights:
+- Adequacy: 0.30
+- Faithfulness: 0.20
+- Fluency: 0.15
+- Terminology: 0.10
+- Style/Tone: 0.10
+- Reference Alignment: 0.15
+
+Formula:
+weighted_score = (
+  0.30 * adequacy +
+  0.20 * faithfulness +
+  0.15 * fluency +
+  0.10 * terminology +
+  0.10 * style_tone +
+  0.15 * reference_alignment
+)
+
+Output requirements:
+- Return ONLY valid JSON
+- Scores must be integers (except confidence and weighted_score)
+- weighted_score must be rounded to 2 decimal places
+
+Return:
+{
+  "adequacy": int,
+  "faithfulness": int,
+  "fluency": int,
+  "terminology": int,
+  "style_tone": int,
+  "reference_alignment": int,
+  "hallucination": boolean,
+  "hallucination_severity": "minor" | "major" | null,
+  "confidence": float,
+  "weighted_score": float,
+  "justification": "brief explanation referencing issues and quoting source and/or reference evidence",
+  "issues": [
+    {
+      "source_text": "quote from source",
+      "reference_text": "corresponding reference segment",
+      "candidate_text": "candidate segment",
+      "issue": "mistranslation, omission, addition, terminology issue, tone mismatch, etc.",
+      "severity": "minor" | "major",
+      "evidence": "why incorrect or divergent, citing source/reference"
+    }
+  ]
+}
