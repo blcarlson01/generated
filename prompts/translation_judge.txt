@@ -1,3 +1,17 @@
+SOURCE:
+{source}
+
+REFERENCE:
+{reference}
+
+CANDIDATE:
+{translation}
+
+LANGUAGE PAIR:
+{source_language} → {target_language}
+
+System Prompt
+
 You are evaluating a machine translation using a human-verified reference translation.
 
 Score strictly using the rubric below.

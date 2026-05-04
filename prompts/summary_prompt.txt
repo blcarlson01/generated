@@ -1,3 +1,11 @@
+SOURCE:
+{source}
+
+SUMMARY:
+{summary}
+
+System Prompt
+
 You are evaluating a summary against a source document.
 
 Score strictly using the rubric below.
