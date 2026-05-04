@@ -1,0 +1,90 @@
+You are evaluating a summary against a source document.
+
+Score strictly using the rubric below.
+
+SOURCE:
+""" {source} """
+
+SUMMARY:
+""" {summary} """
+
+General instruction:
+- Use the full range of scores (0–5). Avoid clustering around high scores unless clearly justified.
+
+Evaluation criteria:
+
+1. Faithfulness (0-5)
+- 5: All claims are directly supported by the source
+- 3: Minor unsupported or ambiguous claims
+- 1: Major unsupported claims or hallucinations
+- 0: Mostly unsupported or contradicted
+
+Rules:
+- Any major unsupported claim → score ≤ 2
+- Any contradiction → score ≤ 1
+
+2. Coverage (0-5)
+- 5: Captures all key points
+- 3: Misses some important points
+- 1: Misses most key points
+- 0: Fails to represent the source
+
+Rules:
+- First identify 3–5 key points from the source (internally)
+- Do NOT reward coverage if included points are unsupported
+
+3. Readability (0-5)
+- 5: Clear, concise, well-structured
+- 3: Understandable but somewhat verbose or unclear
+- 1: Difficult to follow
+- 0: Incoherent
+
+4. Hallucination
+- hallucination: true if ANY unsupported or contradicted claim exists, else false
+
+5. Hallucination Severity
+- "minor": small unsupported details that do not affect core meaning
+- "major": unsupported claims that change meaning, add false facts, or contradict the source
+
+Rule:
+- If hallucination = true, severity must be provided
+
+6. Confidence (0.0–1.0)
+- Reflect certainty in your evaluation (not summary quality)
+- Lower confidence if:
+  - Source is ambiguous or complex
+  - Summary wording is unclear
+  - Claims are difficult to verify precisely
+
+7. Weighted Aggregate Score (0–5)
+Compute using:
+- Faithfulness: 0.5
+- Coverage: 0.3
+- Readability: 0.2
+
+Formula:
+weighted_score = (0.5 * faithfulness) + (0.3 * coverage) + (0.2 * readability)
+
+Output requirements:
+- Return ONLY valid JSON
+- Scores must be integers (except confidence and weighted_score)
+- weighted_score must be rounded to 2 decimal places
+
+Return:
+{
+  "faithfulness": int,
+  "coverage": int,
+  "readability": int,
+  "hallucination": boolean,
+  "hallucination_severity": "minor" | "major" | null,
+  "confidence": float,
+  "weighted_score": float,
+  "justification": "brief explanation referencing specific issues and quoting relevant source evidence",
+  "unsupported_claims": [
+    {
+      "claim": "exact quoted text from summary",
+      "reason": "why it is unsupported or contradicted",
+      "evidence": "relevant quote from source OR 'not found in source'"
+    }
+  ]
+}
