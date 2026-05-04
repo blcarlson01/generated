@@ -1,0 +1,124 @@
+You are evaluating a translation against a source text.
+
+Score strictly using the rubric below.
+
+SOURCE (original language):
+""" {source} """
+
+TRANSLATION (target language):
+""" {translation} """
+
+General instructions:
+- Use the full range of scores (0–5). Avoid clustering around high scores unless clearly justified.
+- Evaluate meaning, not literal word matching, unless literal meaning is required.
+- Do NOT penalize valid paraphrases that preserve meaning and tone.
+- Consider that multiple valid translations may exist.
+- Do not penalize differences in wording if meaning, tone, and intent are preserved.
+- Prefer semantic equivalence over literal similarity.
+- When multiple translations are valid, evaluate whether the translation is acceptable, not whether it matches a preferred phrasing.
+
+Evaluation criteria:
+
+1. Adequacy (0-5)  [Meaning Preservation]
+- 5: All meaning from the source is accurately preserved
+- 3: Minor meaning differences or slight omissions
+- 1: Major meaning errors or missing content
+- 0: Meaning is largely incorrect or lost
+
+Rules:
+- Any major mistranslation → score ≤ 2
+- Missing key information → score ≤ 2
+- Do NOT penalize valid paraphrases that preserve meaning
+
+2. Fluency (0-5)  [Language Quality]
+- 5: Natural, grammatically correct, native-level flow
+- 3: Understandable but awkward or slightly unnatural
+- 1: Disfluent or hard to read
+- 0: Incoherent
+
+3. Faithfulness (0-5)  [No Additions / Hallucinations]
+- 5: No added or invented content
+- 3: Minor additions that don’t affect meaning
+- 1: Significant added or altered meaning
+- 0: Contains fabricated or misleading content
+
+Rules:
+- Any added factual content not in source → score ≤ 2
+
+4. Terminology Accuracy (0-5)
+- 5: Correct and consistent terminology
+- 3: Minor inconsistencies or slightly off terms
+- 1: Incorrect key terms
+- 0: Terminology is misleading or wrong
+
+5. Style / Tone Preservation (0-5)
+- 5: Tone and style fully match the source (e.g., formal, casual, technical, persuasive)
+- 3: Mostly preserved but with noticeable shifts
+- 1: Tone significantly different or inappropriate
+- 0: Completely mismatched tone
+
+Rules:
+- Do NOT penalize stylistic differences that preserve tone and intent
+- Penalize tone shifts that change how the message would be perceived
+
+Evaluate:
+- Formality level (formal vs casual)
+- Emotional tone (neutral, persuasive, humorous, etc.)
+- Register (technical, legal, conversational, etc.)
+
+6. Hallucination
+- hallucination: true if ANY added or unsupported meaning exists, else false
+
+7. Hallucination Severity
+- "minor": stylistic or low-impact additions
+- "major": changes meaning, adds facts, or misleads
+
+Rule:
+- If hallucination = true, severity must be provided
+
+8. Confidence (0.0–1.0)
+- Reflect certainty in your evaluation (not translation quality)
+- Lower confidence if:
+  - Source is ambiguous or idiomatic
+  - Cultural nuance is hard to interpret
+  - Multiple valid translations exist
+
+9. Weighted Aggregate Score (0–5)
+
+Weights:
+- Adequacy: 0.35
+- Faithfulness: 0.25
+- Fluency: 0.15
+- Terminology: 0.10
+- Style/Tone: 0.15
+
+Formula:
+weighted_score = (0.35 * adequacy) + (0.25 * faithfulness) + (0.15 * fluency) + (0.10 * terminology) + (0.15 * style_tone)
+
+Output requirements:
+- Return ONLY valid JSON
+- Scores must be integers (except confidence and weighted_score)
+- weighted_score must be rounded to 2 decimal places
+
+Return:
+{
+  "adequacy": int,
+  "fluency": int,
+  "faithfulness": int,
+  "terminology": int,
+  "style_tone": int,
+  "hallucination": boolean,
+  "hallucination_severity": "minor" | "major" | null,
+  "confidence": float,
+  "weighted_score": float,
+  "justification": "brief explanation referencing specific issues and quoting relevant source evidence",
+  "issues": [
+    {
+      "source_text": "relevant quote from source",
+      "translation_text": "corresponding translation segment",
+      "issue": "description (mistranslation, omission, addition, tone mismatch, terminology issue)",
+      "severity": "minor" | "major",
+      "evidence": "why this is incorrect or mismatched, with reference to source tone or wording"
+    }
+  ]
+}
