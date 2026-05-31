@@ -52,6 +52,10 @@ A collection of LLM evaluation tools, data processing scripts, prompt templates,
 | [images/](images/) | Raccoon mascot artwork, icons, and screenshots |
 | [video/](video/) | Generated video clips |
 
+### References
+
+https://github.com/withmartian/code-review-benchmark
+
 ---
 
 ## Themes
