@@ -1,5 +1,5 @@
 Below is a markdown version of the currently known cryptography-focused LLM benchmarks, along with whether they have native or known integration with Inspect AI.
-
+https://github.com/epoch-research/eci-public
 ---
 
 # Cryptography-Focused LLM Benchmarks
