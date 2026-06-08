@@ -1,7 +1,16 @@
 # Generated
 
 A collection of LLM evaluation tools, data processing scripts, prompt templates, and UI components built for internal research and experimentation.
-
+"coding": ["code", "programming", "software", "bug", "debug"],
+            "reasoning": ["math", "reason", "logic", "commonsense", "gsm", "proof"],
+            "instruction_following": ["instruction", "follow", "ifeval"],
+            "knowledge": ["knowledge", "mmlu", "trivia", "qa", "question"],
+            "language_understanding": ["nli", "inference", "comprehension", "reading"],
+            "safety": ["safe", "harm", "bias", "toxic", "truthful", "adversarial"],
+            "multimodal": ["vision", "image", "visual", "chart", "document", "video"],
+            "long_context": ["long", "context", "scroll", "document", "needle"],
+            "agentic": ["agent", "tool", "web", "browse", "planning", "task"],
+            "dialogue": ["chat", "dialogue", "conversation", "mt-bench"],
 ---
 
 ## Contents
