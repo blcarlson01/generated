@@ -1,33 +1,4 @@
-This is one of the biggest architectural changes I would make from the earlier version. Instead of fitting separate ICI models, the README and code should treat **Public** and **Internal** as latent dimensions underneath a single global capability model.
-
-The resulting hierarchy becomes:
-
-```text
-Global Capability (ICI)
-        │
-        ├── Public Capability
-        │       ├── Translation
-        │       ├── Coding
-        │       └── Reasoning
-        │
-        └── Internal Capability
-                ├── Support
-                ├── RAG
-                ├── Agent Workflows
-                └── Enterprise Tasks
-```
-
-This ensures:
-
-* One stable scale
-* Comparable scores
-* No scale drift
-* Ability to add benchmarks continuously
-* Ability to detect benchmark overfitting
-
----
-
-## Updated README.md
+##  README.md
 
 # Internal Capability Index (ICI)
 
