@@ -1,0 +1,26 @@
+Analyze this repository.
+
+Produce an Agentic Function Point Analysis.
+
+Identify:
+
+- Traditional Function Points
+- Agentic Function Points
+- Planning functions
+- Memory functions
+- Tool integrations
+- Reasoning functions
+- Validation functions
+- Multi-agent interactions
+- Human approval points
+- Safety mechanisms
+- Estimated complexity
+- Estimated engineering effort
+
+Produce:
+
+- Executive Summary
+- AFP Breakdown
+- Architecture Diagram
+- Complexity Score
+- Improvement Opportunities
